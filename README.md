@@ -1,9 +1,22 @@
 Run the backend from the project root:
 
+**Windows (PowerShell):**
+
 ```powershell
 python -m pip install -r backend/requirements.txt waitress
 python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
 ```
+
+**Linux (Bash):**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r backend/requirements.txt waitress
+python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
+```
+
+For subsequent Linux runs, activate `.venv` and run the final command.
 
 Keep the terminal open while using the API. Frontend files are served separately by Nginx.
 
