@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ŞifrX</title>
+  <link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
+  <link rel="stylesheet" href="/public/css/style.css">
+</head>
+<body>
+
+  <!-- AUTH BÖLMƏSİ (GİRİŞ VƏ QEYDİYYAT) -->
+  <div id="authSection" class="auth-wrap">
+    <div class="auth-box">
+      <div class="auth-tabs">
+        <button id="tabLogin" class="tab-btn active" onclick="switchAuthTab('login')">Giriş</button>
+        <button id="tabRegister" class="tab-btn" onclick="switchAuthTab('register')">Qeydiyyat</button>
+      </div>
+
+      <!-- Giriş Formu -->
+      <form id="loginForm" class="auth-form" onsubmit="handleLogin(event)">
+        <input type="text" id="loginUsername" placeholder="İstifadəçi adı" autocomplete="username" required>
+        <input type="password" id="loginPassword" placeholder="Master Şifrə" autocomplete="current-password" required>
+        <div id="loginTwoFactor" class="hidden">
+          <label for="loginOtp">Authenticator və ya bərpa kodu</label>
+          <input type="text" id="loginOtp" placeholder="6 rəqəmli kod" autocomplete="one-time-code" maxlength="32">
+        </div>
+        <button type="submit" class="btn btn-primary">Daxil Ol</button>
+      </form>
+
+      <!-- Qeydiyyat Formu -->
+      <form id="registerForm" class="auth-form hidden" onsubmit="handleRegister(event)">
+        <input type="text" id="regUsername" placeholder="İstifadəçi adı" autocomplete="username" required>
+        <input type="password" id="regPassword" placeholder="Master Şifrə (min. 6 simvol)" autocomplete="new-password" required>
+        <input type="password" id="regConfirmPassword" placeholder="Master Şifrə Təkrarı" autocomplete="new-password" required>
+        <button type="submit" class="btn btn-primary">Qeydiyyatdan Keç</button>
+      </form>
+
+      <div id="authError" class="status-msg error hidden"></div>
+      <div id="authSuccess" class="status-msg success hidden"></div>
+    </div>
+  </div>
+
+  <!-- ƏSAS İDARƏETMƏ PANELİ (GİRİŞ EDİLDİKDƏ GÖRÜNÜR) -->
+  <div id="mainSection" class="main-wrap hidden">
+
+    <!-- İSTİFADƏÇİ BAŞLIĞI -->
+    <header class="top-nav">
+      <span class="app-name">ŞifrX</span>
+      <details id="profileMenu" class="profile-menu">
+        <summary class="btn btn-secondary btn-sm profile-button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <circle cx="12" cy="8" r="4"></circle>
+            <path d="M4 21v-2a8 8 0 0 1 16 0v2"></path>
+          </svg>
+          Profil <span class="profile-chevron" aria-hidden="true">▾</span>
+        </summary>
+        <div class="profile-dropdown">
+          <p class="profile-label">İstifadəçi adı</p>
+          <span class="user-badge" id="currentUserBadge"></span>
+          <a href="/settings" class="btn btn-secondary btn-sm btn-block profile-settings-link">Tənzimləmələr</a>
+          <button type="button" class="btn btn-danger btn-sm btn-block" onclick="handleLogout()">Çıxış</button>
+        </div>
+      </details>
+    </header>
+
+<main class="content-grid settings-page">
+  <div class="settings-heading">
+    <h1>Tənzimləmələr</h1>
+    <a href="/" class="btn btn-secondary btn-sm">← Vault-a qayıt</a>
+  </div>
+  <p id="settingsStatus" class="status-msg hidden" role="status" aria-live="polite"></p>
+  <section class="panel-box" aria-labelledby="passwordHeading">
+    <h2 id="passwordHeading">Şifrəni dəyiş</h2>
+    <p class="settings-note">Saxlanılan məlumatlar yeni şifrə ilə yenidən şifrələnəcək. Sonra yenidən daxil olun.</p>
+    <form id="passwordForm" class="auth-form" onsubmit="changeAccountPassword(event)">
+      <label>Cari şifrə<input name="current_password" type="password" autocomplete="current-password" required></label>
+      <label>Yeni şifrə<input name="new_password" type="password" autocomplete="new-password" minlength="6" required></label>
+      <label>Yeni şifrənin təkrarı<input name="confirm_password" type="password" autocomplete="new-password" minlength="6" required></label>
+      <label class="two-factor-field hidden">2FA və ya bərpa kodu<input name="otp_code" type="text" autocomplete="one-time-code" maxlength="32"></label>
+      <button type="submit" class="btn btn-primary">Şifrəni dəyiş</button>
+    </form>
+  </section>
+  <section class="panel-box" aria-labelledby="twoFactorHeading">
+    <h2 id="twoFactorHeading">İki mərhələli doğrulama (2FA)</h2>
+    <p class="settings-note">Authenticator tətbiqindəki 30 saniyəlik kodla hesabınızı qoruyun.</p>
+    <p id="twoFactorStatus" class="settings-note">Yüklənir…</p>
+    <form id="twoFactorForm" class="auth-form" onsubmit="submitTwoFactor(event)">
+      <label>Cari şifrə<input name="current_password" type="password" autocomplete="current-password" required></label>
+      <div id="twoFactorSetup" class="hidden">
+        <p class="settings-note">QR kodu tətbiqinizdə skan edin və ya açarı əl ilə əlavə edin. Quraşdırma 5 dəqiqə ərzində tamamlanmalıdır.</p>
+        <img id="twoFactorQr" class="two-factor-qr" alt="Authenticator quraşdırma QR kodu">
+        <label for="twoFactorKey">Quraşdırma açarı</label>
+        <div class="input-with-btn">
+          <input id="twoFactorKey" type="text" readonly class="code-font" autocomplete="off">
+          <button type="button" class="btn btn-secondary" onclick="copyText(document.getElementById('twoFactorKey').value)">Kopyala</button>
+        </div>
+      </div>
+      <label id="twoFactorCodeLabel" class="hidden">Authenticator və ya bərpa kodu<input name="otp_code" type="text" autocomplete="one-time-code" maxlength="32"></label>
+      <button id="twoFactorButton" type="submit" class="btn btn-primary" disabled>2FA quraşdır</button>
+      <button id="cancelTwoFactor" type="button" class="btn btn-secondary hidden" onclick="cancelTwoFactorSetup()">Ləğv et</button>
+    </form>
+    <div id="recoveryCodesSection" class="hidden">
+      <h3>Bərpa kodlarını saxlayın</h3>
+      <p class="settings-note">Bu kodlar yalnız indi göstərilir. Telefonunuz itərsə, hər kodu bir dəfə istifadə edə bilərsiniz. Onları təhlükəsiz yerdə saxlayın.</p>
+      <pre id="recoveryCodes" class="recovery-codes"></pre>
+      <button type="button" class="btn btn-secondary" onclick="copyText(document.getElementById('recoveryCodes').textContent)">Kodları kopyala</button>
+      <button type="button" class="btn btn-primary" onclick="finishTwoFactorSetup()">Saxladım, girişə keç</button>
+    </div>
+  </section>
+  <section class="panel-box danger-panel" aria-labelledby="deleteHeading">
+    <h2 id="deleteHeading">Hesabı sil</h2>
+    <p class="settings-note">Hesabınız və bütün vault məlumatlarınız həmişəlik silinəcək. Bu əməliyyat geri qaytarılmır.</p>
+    <form id="deleteAccountForm" class="auth-form" onsubmit="deleteAccount(event)">
+      <label>Cari şifrə<input name="current_password" type="password" autocomplete="current-password" required></label>
+      <label class="two-factor-field hidden">2FA və ya bərpa kodu<input name="otp_code" type="text" autocomplete="one-time-code" maxlength="32"></label>
+      <label>Təsdiq üçün DELETE yazın<input name="confirmation" type="text" autocomplete="off" pattern="DELETE" required></label>
+      <button type="submit" class="btn btn-danger">Hesabı həmişəlik sil</button>
+    </form>
+  </section>
+</main>
+  </div>
+
+  <script src="/public/js/app.js"></script>
+  <script src="/public/js/settings.js"></script>
+</body>
+</html>

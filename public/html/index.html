@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ŞifrX</title>
+  <link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
+  <link rel="stylesheet" href="/public/css/style.css">
+</head>
+<body>
+
+  <!-- AUTH BÖLMƏSİ (GİRİŞ VƏ QEYDİYYAT) -->
+  <div id="authSection" class="auth-wrap">
+    <div class="auth-box">
+      <div class="auth-tabs">
+        <button id="tabLogin" class="tab-btn active" onclick="switchAuthTab('login')">Giriş</button>
+        <button id="tabRegister" class="tab-btn" onclick="switchAuthTab('register')">Qeydiyyat</button>
+      </div>
+
+      <!-- Giriş Formu -->
+      <form id="loginForm" class="auth-form" onsubmit="handleLogin(event)">
+        <input type="text" id="loginUsername" placeholder="İstifadəçi adı" autocomplete="username" required>
+        <input type="password" id="loginPassword" placeholder="Master Şifrə" autocomplete="current-password" required>
+        <div id="loginTwoFactor" class="hidden">
+          <label for="loginOtp">Authenticator və ya bərpa kodu</label>
+          <input type="text" id="loginOtp" placeholder="6 rəqəmli kod" autocomplete="one-time-code" maxlength="32">
+        </div>
+        <button type="submit" class="btn btn-primary">Daxil Ol</button>
+      </form>
+
+      <!-- Qeydiyyat Formu -->
+      <form id="registerForm" class="auth-form hidden" onsubmit="handleRegister(event)">
+        <input type="text" id="regUsername" placeholder="İstifadəçi adı" autocomplete="username" required>
+        <input type="password" id="regPassword" placeholder="Master Şifrə (min. 6 simvol)" autocomplete="new-password" required>
+        <input type="password" id="regConfirmPassword" placeholder="Master Şifrə Təkrarı" autocomplete="new-password" required>
+        <button type="submit" class="btn btn-primary">Qeydiyyatdan Keç</button>
+      </form>
+
+      <div id="authError" class="status-msg error hidden"></div>
+      <div id="authSuccess" class="status-msg success hidden"></div>
+    </div>
+  </div>
+
+  <!-- ƏSAS İDARƏETMƏ PANELİ (GİRİŞ EDİLDİKDƏ GÖRÜNÜR) -->
+  <div id="mainSection" class="main-wrap hidden">
+
+    <!-- İSTİFADƏÇİ BAŞLIĞI -->
+    <header class="top-nav">
+      <span class="app-name">ŞifrX</span>
+      <details id="profileMenu" class="profile-menu">
+        <summary class="btn btn-secondary btn-sm profile-button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <circle cx="12" cy="8" r="4"></circle>
+            <path d="M4 21v-2a8 8 0 0 1 16 0v2"></path>
+          </svg>
+          Profil <span class="profile-chevron" aria-hidden="true">▾</span>
+        </summary>
+        <div class="profile-dropdown">
+          <p class="profile-label">İstifadəçi adı</p>
+          <span class="user-badge" id="currentUserBadge"></span>
+          <a href="/settings" class="btn btn-secondary btn-sm btn-block profile-settings-link">Tənzimləmələr</a>
+          <button type="button" class="btn btn-danger btn-sm btn-block" onclick="handleLogout()">Çıxış</button>
+        </div>
+      </details>
+    </header>
+
+    <main class="content-grid">
+
+      <!-- ŞİFRƏ GENERATORU -->
+      <section class="panel-box">
+        <div class="generator-display">
+          <input type="text" id="genResult" readonly class="code-font" placeholder="Yaradılan şifrə">
+          <button type="button" class="btn btn-secondary" onclick="copyGeneratedPassword()">Kopyala</button>
+          <button type="button" class="btn btn-primary" onclick="generateNewPassword()">Yarat</button>
+        </div>
+        <div class="generator-controls">
+          <label class="slider-label">
+            Uzunluq: <span id="lengthDisplay">16</span>
+            <input type="range" id="genLength" min="8" max="64" value="16" oninput="updateLengthDisplay(this.value)">
+          </label>
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="genUpper" checked> A-Z</label>
+            <label><input type="checkbox" id="genLower" checked> a-z</label>
+            <label><input type="checkbox" id="genDigits" checked> 0-9</label>
+            <label><input type="checkbox" id="genSymbols" checked> !@#</label>
+          </div>
+        </div>
+      </section>
+
+      <!-- MƏLUMAT YARATMA (LOGIN VƏ YA KART) -->
+      <section class="panel-box">
+        <div class="type-toggle">
+          <button type="button" id="btnTypeLogin" class="toggle-btn active" onclick="switchItemType('login')">Login</button>
+          <button type="button" id="btnTypeCard" class="toggle-btn" onclick="switchItemType('card')">Kart</button>
+        </div>
+
+        <form id="itemForm" onsubmit="handleSaveItem(event)">
+          <!-- Login Form Sahələri -->
+          <div id="loginFields" class="form-fields">
+            <input type="text" id="fieldLoginTitle" placeholder="Başlıq (məs. Google, GitHub)" required>
+            <input type="text" id="fieldLoginUsername" placeholder="İstifadəçi adı və ya E-poçt" required>
+            <div class="input-with-btn">
+              <input type="password" id="fieldLoginPassword" placeholder="Şifrə" class="code-font" required>
+              <button type="button" class="btn btn-sm btn-secondary" onclick="useGeneratedForLogin()">Yapışdır</button>
+            </div>
+            <input type="text" id="fieldLoginWebsite" placeholder="Vebsayt / Qeyd">
+          </div>
+
+          <!-- Kart Form Sahələri -->
+          <div id="cardFields" class="form-fields hidden">
+            <input type="text" id="fieldCardTitle" placeholder="Kart Başlığı (məs. ABB Visa, Kapital)">
+            <input type="text" id="fieldCardHolder" placeholder="Kart Sahibi (Ad Soyad)">
+            <input type="text" id="fieldCardNumber" placeholder="Kart Nömrəsi (16 rəqəm)" maxlength="19">
+            <div class="grid-2">
+              <input type="text" id="fieldCardExpiry" placeholder="MM/YY" maxlength="5">
+              <input type="password" id="fieldCardCvv" placeholder="CVV" maxlength="4" class="code-font">
+            </div>
+          </div>
+
+          <button type="submit" id="btnSaveItem" class="btn btn-primary btn-block">Yadda Saxla</button>
+        </form>
+        <div id="itemStatus" class="status-msg hidden"></div>
+      </section>
+
+      <!-- SAXLANILAN ŞİFRƏLƏNMİŞ .SIFRX ELEMENTLƏRİ -->
+      <section class="panel-box">
+        <div id="itemsContainer" class="items-list">
+          <div class="empty-state">Məlumat yoxdur</div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/public/js/app.js"></script>
+</body>
+</html>

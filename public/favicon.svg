@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#141824"/>
+      <stop offset="100%" stop-color="#090a0f"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="16" y1="12" x2="48" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="20" y1="20" x2="44" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Arxa fon (Squircle) -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bgGrad)" stroke="#222838" stroke-width="2"/>
+
+  <!-- Daxili işıq effekti -->
+  <rect x="6" y="6" width="52" height="52" rx="12" fill="url(#glowGrad)"/>
+
+  <!-- Qıfılın qövsü (Padlock Shackle) -->
+  <path d="M24 28 V21 C24 16.58 27.58 13 32 13 C36.42 13 40 16.58 40 21 V28" stroke="url(#accentGrad)" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Qıfılın korpusu -->
+  <rect x="18" y="27" width="28" height="23" rx="6" fill="#11141c" stroke="url(#accentGrad)" stroke-width="2.5"/>
+
+  <!-- Kriptoqrafik "X" mərkəzi -->
+  <path d="M26 33 L38 45 M38 33 L26 45" stroke="#60a5fa" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- Mərkəzi kripotqrafik açar nüvəsi -->
+  <circle cx="32" cy="39" r="3.5" fill="#090a0f" stroke="#93c5fd" stroke-width="1.5"/>
+  <circle cx="32" cy="39" r="1.5" fill="#60a5fa"/>
+
+  <!-- "Ş" hərfini simvolizə edən alt quyruq elementi -->
+  <path d="M30 53 C31 55 33 55 34 53 L33 56" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"/>
+</svg>
