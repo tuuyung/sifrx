@@ -1,3 +1,12 @@
+Run the backend from the project root:
+
+```powershell
+python -m pip install -r backend/requirements.txt waitress
+python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
+```
+
+Keep the terminal open while using the API. Frontend files are served separately by Nginx.
+
 # SifrX — Encrypted Vault Storage
 
 **SifrX** stores encrypted vault payloads using a Python API and an HTML/CSS/JavaScript frontend. Encryption and decryption run on the backend: the server receives the master password and plaintext during requests. This architecture is not zero-knowledge or end-to-end encryption. HTTPS is required for network confidentiality. Item titles, types, IDs and timestamps remain plaintext metadata.
