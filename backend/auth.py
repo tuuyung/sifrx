@@ -9,9 +9,7 @@ import logging
 logger = logging.getLogger("sifrx.auth")
 
 
-import base64
 import secrets
-import json
 import time
 from collections import deque
 from typing import Dict, Any, Optional, Tuple
@@ -59,6 +57,11 @@ class AuthManager:
     def clear_attempts(self, username):
         self._attempts.pop(self.storage.compute_blind_index(username), None)
 
+    def verify_account_second_factor(self, username, meta, code):
+        """Share account-specific second-factor validation with settings."""
+        return verify_second_factor(meta, code, self.storage.pepper_key,
+                                    self.storage.compute_blind_index(username))
+
     @logged_operation
     def revoke_sessions(self, username):
         account_id = self.storage.compute_blind_index(username)
@@ -80,17 +83,12 @@ class AuthManager:
             raise AuthError("Bu istifadəçi adı artıq qeydiyyatdan keçib.")
 
         # Duz (salt) və Argon2id verifikatorunun generasiyası
-        salt = CentralCryptoEngine.generate_salt()
-        verifier = CentralCryptoEngine.compute_auth_verifier(password, salt)
-
         meta = {
-            "salt": base64.b64encode(salt).decode("ascii"),
-            "verifier": verifier,
+            **CentralCryptoEngine.create_auth_credentials(password),
             "created_at": datetime.now(timezone.utc).isoformat()
         }
 
         # İstifadəçi üçün anonim bulud qovluğu açılır və meta fayl yazılır
-        self.storage.ensure_user_vault(username)
         self.storage.save_user_meta(username, meta)
 
         return {"success": True, "username": username}
@@ -103,28 +101,21 @@ class AuthManager:
             raise AuthError("İstifadəçi adı və şifrə tələb olunur.")
 
         self.check_rate_limit(username)
-        snapshot = self.storage.account_snapshot(username)
-        files = {**snapshot[1], **snapshot[0]}
-        user_meta = json.loads(files["user.meta"]) if "user.meta" in files else None
+        snapshot, files, user_meta = self.storage.load_account(username)
         if not user_meta:
             raise AuthError("İstifadəçi adı və ya şifrə yanlışdır.")
 
-        salt = base64.b64decode(user_meta["salt"])
-        expected_verifier = user_meta["verifier"]
-
-        if not CentralCryptoEngine.verify_auth_verifier(password, salt, expected_verifier):
+        if not CentralCryptoEngine.verify_account_password(password, user_meta):
             raise AuthError("İstifadəçi adı və ya şifrə yanlışdır.")
 
         if user_meta.get("two_factor", {}).get("enabled"):
             if not otp_code:
                 # The password was verified, but no authenticated session is issued yet.
                 raise TwoFactorRequired("Authenticator tətbiqindən kodu daxil edin.")
-            updated = verify_second_factor(user_meta, otp_code, self.storage.pepper_key,
-                                           self.storage.compute_blind_index(username))
+            updated = self.verify_account_second_factor(username, user_meta, otp_code)
             if updated is None:
                 raise TwoFactorRequired("2FA kodu yanlışdır, vaxtı bitib və ya artıq istifadə olunub.")
-            files["user.meta"] = json.dumps(updated, ensure_ascii=False).encode("utf-8")
-            self.storage.replace_account(username, files, snapshot)
+            self.storage.save_account_meta(username, files, updated, snapshot)
         self.clear_attempts(username)
 
         # Uğurlu giriş: Təhlükəsiz sessiya tokeni yaradılır

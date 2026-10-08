@@ -1,0 +1,21 @@
+[Unit]
+Description=SifrX Python API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=admin
+WorkingDirectory=/var/www/sifrx
+ExecStart=/var/www/sifrx/.venv/bin/python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

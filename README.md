@@ -11,11 +11,13 @@ python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
 
 ```bash
 python3 -m venv .venv
+source .venv/bin/activate
 sudo .venv/bin/python -m pip install -r backend/requirements.txt waitress
 sudo .venv/bin/python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
 ```
 
-For subsequent Linux runs, run the final command from the project root.
+For subsequent Linux runs, activate the environment with `source .venv/bin/activate`
+and run the final command from the project root.
 
 Keep the terminal open while using the API. Frontend files are served separately by Nginx.
 
@@ -35,7 +37,7 @@ Platforma ən müasir beynəlxalq standart olan və Şifrə Heşləmə Yarışma
 ### 2. Blind Indexing (İstifadəçi Adlarının Anonimləşdirilməsi)
 Məxfilik metadata səviyyəsində də qorunur:
 * Diskdə və ya bulud saxlancında istifadəçi adları açıq şəkildə qeyd edilmir.
-* Hər bir istifadəçinin qovluğu və identifikasiya açarı serverin gizli açarı (**Server Pepper**) ilə **HMAC-SHA256** vasitəsilə birtərəfli anonim heşə çevrilir (`cloud_storage/users/<blind_hmac_id>/`).
+* Hər bir istifadəçinin qovluğu və identifikasiya açarı serverin gizli açarı (**Server Pepper**) ilə **HMAC-SHA256** vasitəsilə birtərəfli anonim heşə çevrilir (`users/<blind_hmac_id>/ in S3`).
 * HMAC-derived directory names conceal usernames from a storage-only observer, but do not guarantee anonymity if the pepper or other identifying information is exposed.
 
 ### 3. AES-256-GCM encryption
@@ -152,12 +154,8 @@ Keep `.env`, `cloud_storage/`, logs and Python caches out of version control. Lo
 │   └── js/
 │       └── app.js        # Çevik vanilla JavaScript nəzarətçisi
 │
-└── cloud_storage/        # BULUD YADDAŞI QOVLUĞU
-    ├── .server_pepper    # Serverin gizli pepper açarı (anonimləşdirmə üçün)
-    └── users/            # İstifadəçilərin anonim heşlənmiş qovluqları
-        └── <blind_id>/   # Məs: 349a8a25f64a20dc86ae1aecf382bfbc...
-            ├── user.meta # Argon2id verifikatoru (açıq istifadəçi adı saxlanılmır)
-            └── *.sifrx   # Şifrələnmiş login və kart məlumatları
+logs/
+    sifrx.json            # All operational events in one JSON array
 ```
 
 ---
@@ -176,20 +174,24 @@ pip install -r backend/requirements.txt
 
 ### 3. Mühit Konfiqurasiyası (`.env`)
 Layihədə dəyişdirilə bilən bütün parametrlər `.env` faylında tənzimlənir:
-* **Server Parametrləri:** `FLASK_SECRET_KEY` (HTTP listener settings belong to Nginx).
-* **Məxfilik (Pepper):** `SIFRX_PEPPER_KEY` (boş qaldıqda avtomatik `.server_pepper` faylından istifadə olunur).
+* **Server:** `FLASK_SECRET_KEY`; HTTP listener settings belong to Nginx.
+* **Pepper:** `SIFRX_PEPPER_KEY` is required and must remain stable.
 * **Argon2id:** `ARGON2_TIME_COST`, `ARGON2_MEMORY_COST`, `ARGON2_PARALLELISM`.
-* **Amazon S3 və Ağıllı Fallback:**
-  ```env
-  AWS_ACCESS_KEY_ID=sizin_access_key
-  AWS_SECRET_ACCESS_KEY=sizin_secret_key
-  AWS_REGION=us-east-1
-  AWS_S3_BUCKET=sizin_bucket_adi
-  AWS_S3_ENDPOINT_URL= # İxtiyari (Cloudflare R2, MinIO və s. üçün)
-  ```
-  Configured S3 write failures are reported to the client; uploads and deletes
-  do not silently succeed with only a local copy. Explicit local-only development
-  uses `SIFRX_STORAGE_TYPE=local`. Keep the persistent pepper backed up privately.
+* **S3:** `AWS_S3_BUCKET` is required. Configure `AWS_REGION`, `AWS_S3_PREFIX`
+  and optional `AWS_S3_ENDPOINT_URL`. Credentials use the standard AWS SDK
+  chain, including environment variables or IAM roles.
+
+Vault storage is S3-only. Startup fails if configuration is missing or S3 cannot
+be reached; runtime failures are reported to callers. Local mirrors, fallback,
+account directories and disk staging are removed. `SIFRX_STORAGE_TYPE`,
+`SIFRX_LOCAL_STORAGE_PATH` and `SIFRX_STORAGE_PATH` are no longer used.
+
+Before upgrading an installation that used `.server_pepper`, configure
+`SIFRX_PEPPER_KEY` with the exact existing key. Binary pepper files require
+an explicit migration; generating a replacement changes account prefixes and
+prevents decrypting authenticator secrets. Accounts that exist only locally
+must be migrated to S3 before using this version. Existing local files remain
+untouched and are no longer read by the application.
 
 ### 4. Backend application
 
@@ -226,59 +228,35 @@ Open your configured website address in the browser.
 ## Application logging
 
 When the WSGI application is loaded, logging initializes before storage
-and authentication. JSON events are written to category-specific files and the
-console. Each file rotates independently at 5 MiB with five backups. No additional
-logging dependencies are needed.
-
-| File in `logs/` | Category |
-| --- | --- |
-| `requests.jsonl` | HTTP requests, response status, timing and API failures |
-| `authentication.jsonl` | Registration, login, session lookup and revocation |
-| `storage.jsonl` | Local/S3 operations, fallback and recovery |
-| `crypto.jsonl` | Encryption, decryption, password generation and verification |
-| `settings.jsonl` | Password changes, account deletion and 2FA management |
-| `frontend.jsonl` | Browser activity, network, clipboard and browser errors |
-| `application.jsonl` | Startup, runtime and uncategorized application events |
-| `errors.jsonl` | An additional copy of ERROR and CRITICAL events from all categories |
-
-Every event includes its `category`. Domain events appear in one category file;
-errors also appear in `errors.jsonl`. Request IDs are shared across category files
-so related authentication, storage, crypto and settings events can be traced.
-The previous `sifrx.jsonl` file, if present, is retained as historical output;
-new events go to the files above after the server restarts.
-
-Set these variables in `.env` to customize logging:
+and authentication. All categories and error levels are stored once in
+`logs/sifrx.json`, a valid JSON array. Existing entries in this file survive
+restarts. There are no category files, rotation files or duplicate error copies.
+Historical `.jsonl` files are left untouched; new events only go to `sifrx.json`.
+Console output is optional. The JSON file grows without automatic rotation.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SIFRX_LOG_LEVEL` | `INFO` | DEBUG, INFO, WARNING, ERROR, CRITICAL |
-| `SIFRX_LOG_DIR` | `logs` | Log directory |
-| `SIFRX_LOG_MAX_BYTES` | `5242880` | Rotation size in bytes per file |
-| `SIFRX_LOG_BACKUP_COUNT` | `5` | Retained rotated files per category |
+| `SIFRX_LOG_DIR` | `logs` | Directory containing `sifrx.json` |
 | `SIFRX_LOG_CONSOLE` | `true` | Console output toggle |
 
-Logs cover HTTP status and duration, authentication/session operations, storage
-operations and recovery/fallback paths, cryptographic operations, browser actions,
-network failures, uncaught browser errors and clipboard failures. DEBUG adds
-operation/request start events. Each HTTP response includes `X-Request-ID` to
-correlate events. Timestamps use UTC.
+`SIFRX_LOG_MAX_BYTES` and `SIFRX_LOG_BACKUP_COUNT` are no longer used.
+Every event includes a UTC timestamp, level, logger, category and event code.
+Request IDs correlate HTTP, authentication, storage, crypto and settings events.
+DEBUG adds operation/request start events. Each HTTP response includes
+`X-Request-ID`. Browser failures use fixed telemetry event codes.
 
 Passwords, usernames, tokens, cookies, request/response bodies, query strings,
 raw URLs, vault titles/content, keys and card information are never logged.
-Exception records contain the exception type and stack locations, excluding
-exception messages, source text and local variables. Browser telemetry sends
-fixed event codes only (no error text or clicked element content), with a
-30-events/minute browser limit and a 60-events/minute server limit per process.
-Server request logs still record rejected telemetry requests. Logs are local;
-no external logging service is used. Keep the log directory private. Rotation
-is intended for a single server process; use a centralized collector for a
-multi-process deployment.
+Exception records contain only the exception type and stack locations.
+Keep logs private. File writes require the application's single server process;
+JSON appends are not crash-atomic. Invalid existing JSON is rejected on startup
+rather than silently overwritten.
 
-To follow logs in PowerShell:
+To read recent events in PowerShell:
 
 ```powershell
-Get-Content logs/requests.jsonl -Wait -Tail 20
-Get-Content logs/errors.jsonl -Wait -Tail 20
+Get-Content logs/sifrx.json -Raw | ConvertFrom-Json | Select-Object -Last 20
 ```
 
 
@@ -291,7 +269,7 @@ Open **Profil ? T?nziml?m?l?r** to access `/settings`.
   are revoked; sign in again with the new password. A corrupt/unreadable item
   aborts the change before any write.
 - **Delete account:** enter the current password, type `DELETE`, and confirm.
-  Account metadata and vault files are removed from local storage and the
+  Account metadata and vault files are removed from the
   configured S3 account prefix. Other accounts and the server pepper remain.
   S3 version history, provider backups and independent filesystem backups are
   governed by their own retention settings; this action does not purge them.
@@ -309,25 +287,23 @@ and restart the server. QR codes are generated locally using
 [PyOTP](https://pyauth.github.io/pyotp/). There is no external QR service.
 Authenticator keys are encrypted at rest using a key derived from the persistent
 server pepper; recovery codes are stored only as hashes. Preserve the existing
-`SIFRX_PEPPER_KEY` or `cloud_storage/.server_pepper`, including across restarts.
+`SIFRX_PEPPER_KEY` across restarts and deployments.
 
 Security operations require JSON with explicit bearer authentication and reject
 cross-site browser requests. Responses are not cached. Password/2FA attempts
 are limited to five per account per minute in this server process. Security
 operations never silently fall back when configured S3 storage is unavailable.
-Local changes are staged and ordinary write failures roll back local/S3 state.
-This remains a single-process app with in-memory sessions and request locking;
-multiple workers/instances need shared sessions, rate limits and transactions.
-Filesystem/S3 updates are not a distributed crash-atomic transaction: preserve
-backups and investigate `.account-stage-*` / `.account-backup-*` directories if
-an operation is interrupted by a server or machine crash. Existing independent
-backups must follow your retention policy.
+Account snapshots and rollback data are held in memory; ordinary S3 write
+failures restore the previous remote state. This remains a single-process app
+with in-memory sessions and request locking; multiple workers/instances need
+shared sessions, rate limits and transactions. Multi-object S3 updates are not
+crash-atomic. S3 version history and provider backups follow their retention
+policies.
 
 Validation:
 
 ```powershell
-python -m unittest discover -s backend/tests -v
+python -m unittest discover -s tests -v
 node --check public/js/app.js
 node --check public/js/settings.js
-node public/js/tests/security.test.cjs
 ```

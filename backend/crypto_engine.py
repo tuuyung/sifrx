@@ -99,6 +99,20 @@ class CentralCryptoEngine:
         return os.urandom(cls.SALT_LENGTH_BYTES)
 
     @classmethod
+    def create_auth_credentials(cls, password):
+        """Create the persisted salt/verifier pair for registration or rotation."""
+        salt = cls.generate_salt()
+        return {
+            "salt": base64.b64encode(salt).decode("ascii"),
+            "verifier": cls.compute_auth_verifier(password, salt),
+        }
+
+    @classmethod
+    def verify_account_password(cls, password, meta):
+        """Verify a password against the credentials stored in account metadata."""
+        return cls.verify_auth_verifier(password, base64.b64decode(meta["salt"]), meta["verifier"])
+
+    @classmethod
     @logged_operation
     def compute_auth_verifier(cls, master_password: str, salt: Optional[bytes] = None) -> str:
         """

@@ -136,18 +136,19 @@ def api_client_events():
     return "", 204
 
 
-def get_authenticated_user():
-    """Authorization başlığından və ya sorğudan sessiya istifadəçisini çıxarır."""
+def get_auth_token(*, allow_cookie=True):
+    """Prefer an explicit bearer token, optionally accepting the session cookie."""
     auth_header = request.headers.get("Authorization", "")
-    token = None
     if auth_header.startswith("Bearer "):
-        token = auth_header[7:].strip()
-    elif "sifrx_token" in request.cookies:
-        token = request.cookies.get("sifrx_token")
+        return auth_header[7:].strip()
+    if allow_cookie:
+        return request.cookies.get("sifrx_token")
+    return None
 
-    if not token:
-        return None
-    return auth.get_session_user(token)
+
+def get_authenticated_user():
+    """Resolve the current user from the request's session token."""
+    return auth.get_session_user(get_auth_token())
 
 
 @app.route("/api/settings", methods=["GET"])
@@ -160,8 +161,8 @@ def api_settings(action=None):
         if request.method == "GET":
             return jsonify(account_settings.status(user))
         # Explicit bearer auth and JSON prevent cookie-only cross-site mutations.
-        header = request.headers.get("Authorization", "")
-        if not header.startswith("Bearer ") or auth.get_session_user(header[7:].strip()) != user:
+        token = get_auth_token(allow_cookie=False)
+        if not token or auth.get_session_user(token) != user:
             return jsonify({"error": "İcazə verilmədi."}), 403
         data = request.get_json(silent=True)
         if not isinstance(data, dict) or any(not isinstance(value, str) or len(value) > 1024 for value in data.values()):
@@ -175,9 +176,9 @@ def api_settings(action=None):
         elif action == "delete-account":
             account_settings.delete_account(user, password, code, data.get("confirmation", ""))
         elif action == "2fa-setup":
-            payload.update(account_settings.begin_two_factor(user, password, header[7:].strip()))
+            payload.update(account_settings.begin_two_factor(user, password, token))
         elif action == "2fa-enable":
-            payload["recovery_codes"] = account_settings.enable_two_factor(user, password, code, header[7:].strip())
+            payload["recovery_codes"] = account_settings.enable_two_factor(user, password, code, token)
         elif action == "2fa-disable":
             account_settings.disable_two_factor(user, password, code)
         else:
@@ -255,13 +256,7 @@ def api_login():
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
-    auth_header = request.headers.get("Authorization", "")
-    token = None
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:].strip()
-    elif "sifrx_token" in request.cookies:
-        token = request.cookies.get("sifrx_token")
-
+    token = get_auth_token()
     if token:
         auth.logout(token)
     resp = jsonify({"success": True})

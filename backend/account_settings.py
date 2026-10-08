@@ -13,7 +13,7 @@ from qrcode.image.svg import SvgPathImage
 from backend.auth import AuthError
 from backend.crypto_engine import CentralCryptoEngine
 from backend.logging_setup import logged_operation
-from backend.two_factor import matching_counter, seal_secret, verify_second_factor
+from backend.two_factor import matching_counter, seal_secret
 
 
 class AccountSettings:
@@ -23,31 +23,23 @@ class AccountSettings:
         self.pending = {}
 
     def _load(self, username):
-        snapshot = self.storage.account_snapshot(username)
-        files = {**snapshot[1], **snapshot[0]}
-        if "user.meta" not in files:
+        snapshot, files, meta = self.storage.load_account(username)
+        if meta is None:
             raise AuthError("Hesab tapılmadı.")
-        return snapshot, files, json.loads(files["user.meta"])
+        return snapshot, files, meta
 
     def _authorize(self, username, password, code):
         self.auth.check_rate_limit(username)
         snapshot, files, meta = self._load(username)
-        if not CentralCryptoEngine.verify_auth_verifier(password, base64.b64decode(meta["salt"]), meta["verifier"]):
+        if not CentralCryptoEngine.verify_account_password(password, meta):
             raise AuthError("Cari şifrə yanlışdır.")
-        updated = verify_second_factor(meta, code, self.storage.pepper_key,
-                                       self.storage.compute_blind_index(username))
+        updated = self.auth.verify_account_second_factor(username, meta, code)
         if updated is None:
             raise AuthError("Etibarlı 2FA və ya bərpa kodu tələb olunur.")
         return snapshot, files, updated
 
     def _save(self, username, files, meta, snapshot):
-        files["user.meta"] = json.dumps(meta, ensure_ascii=False).encode("utf-8")
-        try:
-            self.storage.replace_account(username, files, snapshot)
-        except Exception as error:
-            if getattr(error, "committed", False):
-                self.auth.revoke_sessions(username)
-            raise
+        self.storage.save_account_meta(username, files, meta, snapshot)
         self.auth.clear_attempts(username)
 
     def status(self, username):
@@ -70,9 +62,7 @@ class AccountSettings:
                 item = CentralCryptoEngine.decrypt_from_sifrx(original, current_password)
                 encrypted = CentralCryptoEngine.encrypt_to_sifrx(item["payload"], new_password, meta=item["meta"])
                 files[name] = json.dumps(encrypted, ensure_ascii=False).encode("utf-8")
-        salt = CentralCryptoEngine.generate_salt()
-        meta["salt"] = base64.b64encode(salt).decode("ascii")
-        meta["verifier"] = CentralCryptoEngine.compute_auth_verifier(new_password, salt)
+        meta.update(CentralCryptoEngine.create_auth_credentials(new_password))
         self._save(username, files, meta, snapshot)
         self.auth.revoke_sessions(username)
         self.pending.pop(self.storage.compute_blind_index(username), None)
@@ -82,12 +72,7 @@ class AccountSettings:
         if confirmation != "DELETE":
             raise AuthError("Təsdiq üçün DELETE yazın.")
         snapshot, _, _ = self._authorize(username, password, code)
-        try:
-            self.storage.replace_account(username, None, snapshot)
-        except Exception as error:
-            if getattr(error, "committed", False):
-                self.auth.revoke_sessions(username)
-            raise
+        self.storage.replace_account(username, None, snapshot)
         self.auth.revoke_sessions(username)
         self.pending.pop(self.storage.compute_blind_index(username), None)
         self.auth.clear_attempts(username)

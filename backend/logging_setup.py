@@ -3,7 +3,6 @@
 import functools
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import sys
@@ -23,7 +22,6 @@ LOG_CATEGORIES = {
     "account_settings": "settings",
     "client": "frontend",
 }
-LOG_FILES = (*dict.fromkeys(LOG_CATEGORIES.values()), "application", "errors")
 
 
 def record_category(record):
@@ -31,15 +29,53 @@ def record_category(record):
     return LOG_CATEGORIES.get(component[0] if component else "", "application")
 
 
-class CategoryFilter(logging.Filter):
-    def __init__(self, category):
-        super().__init__()
-        self.category = category
+class JsonArrayFileHandler(logging.Handler):
+    """Append events to one JSON array, serialized by the handler's lock.
 
-    def filter(self, record):
-        if self.category == "errors":
-            return record.levelno >= logging.ERROR
-        return record_category(record) == self.category
+    Like the rest of the application, this requires a single server process.
+    Existing invalid output is rejected rather than silently discarded.
+    """
+    def __init__(self, filename):
+        super().__init__()
+        self.stream = None
+        path = Path(filename)
+        if path.exists() and path.stat().st_size:
+            data = path.read_bytes()
+            entries = json.loads(data)
+            if not isinstance(entries, list):
+                raise ValueError("The log file must contain a JSON array")
+            self.stream = path.open("r+b")
+            self.closing_position = len(data.rstrip()) - 1
+        else:
+            entries = []
+            self.stream = path.open("w+b")
+            self.stream.write(b"[]")
+            self.stream.flush()
+            self.closing_position = 1
+        self.has_entries = bool(entries)
+
+    def emit(self, record):
+        try:
+            entry = self.format(record).encode("utf-8")
+            # The closing bracket remains on disk after every completed write.
+            self.stream.seek(self.closing_position)
+            self.stream.write((b",\n" if self.has_entries else b"\n") + entry + b"\n]")
+            self.closing_position = self.stream.tell() - 1
+            self.stream.truncate()
+            self.stream.flush()
+            self.has_entries = True
+        except Exception:
+            self.handleError(record)
+
+    def close(self):
+        self.acquire()
+        try:
+            if self.stream is not None:
+                self.stream.close()
+                self.stream = None
+        finally:
+            self.release()
+            super().close()
 
 
 class JsonFormatter(logging.Formatter):
@@ -75,16 +111,7 @@ def configure_logging():
         raise ValueError("SIFRX_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL")
     log_dir = Path(os.environ.get("SIFRX_LOG_DIR", str(Path(__file__).resolve().parent.parent / "logs")))
     log_dir.mkdir(parents=True, exist_ok=True)
-    max_bytes = int(os.environ.get("SIFRX_LOG_MAX_BYTES", "5242880"))
-    backups = int(os.environ.get("SIFRX_LOG_BACKUP_COUNT", "5"))
-    if max_bytes <= 0 or backups < 1:
-        raise ValueError("Log size and backup count must be positive")
-    handlers = []
-    for category in LOG_FILES:
-        handler = RotatingFileHandler(log_dir / (category + ".jsonl"), maxBytes=max_bytes,
-                                      backupCount=backups, encoding="utf-8")
-        handler.addFilter(CategoryFilter(category))
-        handlers.append(handler)
+    handlers = [JsonArrayFileHandler(log_dir / "sifrx.json")]
     if os.environ.get("SIFRX_LOG_CONSOLE", "true").lower() in ("true", "1"):
         handlers.append(logging.StreamHandler())
     for handler in handlers:
