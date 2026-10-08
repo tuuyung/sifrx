@@ -11,12 +11,11 @@ python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r backend/requirements.txt waitress
-python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
+sudo .venv/bin/python -m pip install -r backend/requirements.txt waitress
+sudo .venv/bin/python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
 ```
 
-For subsequent Linux runs, activate `.venv` and run the final command.
+For subsequent Linux runs, run the final command from the project root.
 
 Keep the terminal open while using the API. Frontend files are served separately by Nginx.
 
