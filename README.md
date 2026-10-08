@@ -130,33 +130,35 @@ Keep `.env`, `cloud_storage/`, logs and Python caches out of version control. Lo
 
 ## 📂 Layihə Strukturu
 
+```text
+SifrX/
+  backend/
+    __init__.py        # Python package marker
+    app.py             # WSGI API routes, input checks and request locking
+    auth.py            # Sessions, registration, account settings and 2FA
+    crypto_engine.py   # Password hashing and vault encryption
+    storage.py         # S3-only account storage and rollback
+    logging_setup.py   # Single JSON log and operation/request logging
+    requirements.txt
+  tests/
+    test_auth.py       # Authentication and account-security regression tests
+  public/
+    html/
+      index.html
+      settings.html
+    css/style.css
+    js/
+      app.js
+      settings.js
+  logs/sifrx.json
+  README.md
 ```
-ŞifrX/
-│
-├── backend/
-│   ├── crypto_engine.py      # MƏRKƏZİ ŞİFRƏLƏMƏ MOTORU (Argon2id, AES-256-GCM, .sifrx format, generator)
-│   ├── storage.py            # BULUD SAXLANC MENECERİ (Blind Indexing HMAC-SHA256, .sifrx idarəsi)
-│   ├── auth.py               # AUTENTİFİKASİYA MENECERİ (Qeydiyyat, giriş, təhlükəsiz sessiyalar)
-│   ├── app.py                # WSGI REST API behind Nginx
-│   ├── account_settings.py
-│   ├── logging_setup.py
-│   ├── two_factor.py
-│   ├── requirements.txt      # Python asılılıqları (Flask, cryptography, argon2-cffi)
-│   └── tests/
-├── README.md             # Tətbiqin tam təlimat və arxitektura sənədi
-│
-├── public/
-│   ├── html/
-│   │   ├── index.html    # Təmiz, izahsız, ultra-minimalist HTML interfeys
-│   │   └── settings.html
-│   ├── css/
-│   │   └── style.css     # Müasir tünd minimalist dizayn sistemi
-│   └── js/
-│       └── app.js        # Çevik vanilla JavaScript nəzarətçisi
-│
-logs/
-    sifrx.json            # All operational events in one JSON array
-```
+
+Authentication, account settings and two-factor helpers are consolidated in
+`backend/auth.py`. Storage, vault encryption, logging and API routing retain
+separate modules because they have distinct responsibilities. `__init__.py`
+marks `backend` as a regular Python package; it does not start the application.
+
 
 ---
 

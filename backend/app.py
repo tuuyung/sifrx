@@ -27,8 +27,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from flask import Flask, request, jsonify, g
 from backend.crypto_engine import CentralCryptoEngine, CryptoError, InvalidKeyOrTamperedDataError
 from backend.storage import CloudStorageManager, StorageError
-from backend.auth import AuthManager, AuthError, TwoFactorRequired, RateLimitError
-from backend.account_settings import AccountSettings
+from backend.auth import AccountSettings, AuthManager, AuthError, TwoFactorRequired, RateLimitError
 
 app = Flask(__name__, static_folder=None)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", os.urandom(24))

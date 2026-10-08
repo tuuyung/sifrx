@@ -125,11 +125,15 @@ def configure_logging():
     return logger
 
 
-def logged_operation(func):
+def logged_operation(func=None, *, logger_name=None):
     """Log operation outcomes and timing without inspecting arguments/results."""
+    if func is None:
+        return functools.partial(logged_operation, logger_name=logger_name)
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        logger = logging.getLogger("sifrx." + func.__module__.rsplit(".", 1)[-1])
+        component = logger_name or func.__module__.rsplit(".", 1)[-1]
+        logger = logging.getLogger("sifrx." + component)
         started = time.perf_counter()
         event = func.__qualname__
         logger.debug(event + ".started")
