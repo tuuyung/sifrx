@@ -370,11 +370,29 @@ input[type="email"]:focus {
 /* TYPE TOGGLE */
 .type-toggle {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   background-color: var(--bg-input);
   border-radius: var(--radius);
   padding: 3px;
   gap: 4px;
+}
+
+.file-help {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.file-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  max-height: 320px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
 .toggle-btn {
@@ -444,12 +462,15 @@ input[type="email"]:focus {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
 }
 
 .item-info {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .item-badge {
@@ -470,11 +491,17 @@ input[type="email"]:focus {
 .item-title {
   font-weight: 500;
   font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .item-actions {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
 }
 
 /* DECRYPTED VIEW */

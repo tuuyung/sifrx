@@ -3,6 +3,9 @@
 import os
 import sys
 import logging
+import uuid
+import re
+from io import BytesIO
 from pathlib import Path
 
 # Direct script execution puts backend/, rather than the project root, on sys.path.
@@ -24,7 +27,11 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, g, send_file
+from werkzeug.exceptions import RequestEntityTooLarge
+from backend.files import (MAX_UPLOAD_BODY, MAX_TOTAL_BYTES, MAX_FILES, PREVIEW_CHARS,
+                           FileValidationError, FileRateLimitError, FileRequestLimiter,
+                           strict_json, validate_upload, open_file_payload, upload_policy)
 from backend.crypto_engine import CentralCryptoEngine, CryptoError, InvalidKeyOrTamperedDataError
 from backend.storage import CloudStorageManager, StorageError
 from backend.auth import AccountSettings, AuthManager, AuthError, TwoFactorRequired, RateLimitError
@@ -41,9 +48,11 @@ account_settings = AccountSettings(auth)
 
 # The existing sessions are process-local. Serialize vault/security operations so
 # requests cannot read or write an account halfway through a credential change.
-from threading import RLock
+from threading import RLock, BoundedSemaphore
 from urllib.parse import urlsplit
 _account_request_lock = RLock()
+_upload_slots = BoundedSemaphore(2)
+file_limiter = FileRequestLimiter()
 
 
 @app.before_request
@@ -51,9 +60,25 @@ def protect_account_requests():
     if request.path.startswith("/api/") and request.path != "/api/client-events":
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("Origin")
-            if (request.headers.get("Sec-Fetch-Site") == "cross-site"
-                    or (origin and urlsplit(origin).netloc != request.host)):
+            try:
+                parsed_origin = urlsplit(origin) if origin else None
+                invalid_origin = parsed_origin and (parsed_origin.scheme not in ("http", "https")
+                    or parsed_origin.netloc != request.host or parsed_origin.path or parsed_origin.query
+                    or parsed_origin.fragment or parsed_origin.username or parsed_origin.password)
+            except ValueError:
+                invalid_origin = True
+            if request.headers.get("Sec-Fetch-Site") == "cross-site" or invalid_origin:
                 return jsonify({"error": "İcazə verilmədi."}), 403
+        if request.path == "/api/files" and request.method == "POST":
+            request.max_content_length = MAX_UPLOAD_BODY
+            return None
+        vault_action = (request.path == "/api/items" and request.method == "POST") or (
+            request.path.startswith("/api/items/") and request.method in ("POST", "DELETE"))
+        if vault_action and not auth.get_session_user(get_auth_token(allow_cookie=False)):
+            return jsonify({"error": "Hesaba daxil olun."}), 401
+        item_id = (request.view_args or {}).get("item_id")
+        if item_id is not None and (len(item_id) > 128 or not re.fullmatch(r"[a-zA-Z0-9_-]+", item_id)):
+            return jsonify({"error": "Element identifikatoru düzgün deyil."}), 400
         _account_request_lock.acquire()
         g.account_lock_held = True
 
@@ -100,6 +125,30 @@ def storage_unavailable(error):
     request_logger.warning("api.storage_failed", exc_info=True)
     return jsonify({"success": False, "error": "Storage operation failed. Please retry."}), 503
 
+
+@app.errorhandler(FileValidationError)
+def invalid_file(error):
+    return jsonify({"success": False, "error": str(error)}), error.status
+
+
+@app.errorhandler(CryptoError)
+def crypto_operation_failed(error):
+    request_logger.warning("api.crypto_failed", exc_info=True)
+    return jsonify({"success": False, "error": "Əməliyyat tamamlanmadı. Yenidən cəhd edin."}), 500
+
+
+@app.errorhandler(FileRateLimitError)
+def file_rate_limited(error):
+    response = jsonify({"success": False, "error": "Çox sayda cəhd edildi. Bir az sonra yenidən cəhd edin."})
+    response.status_code = 429
+    response.headers["Retry-After"] = str(error.retry_after)
+    return response
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def request_too_large(error):
+    return jsonify({"success": False, "error": "Sorğunun həcmi icazə verilən limiti aşır."}), 413
+
 # Browser diagnostics accept fixed event names only, never exception text or data.
 import time
 from collections import deque
@@ -145,9 +194,9 @@ def get_auth_token(*, allow_cookie=True):
     return None
 
 
-def get_authenticated_user():
+def get_authenticated_user(*, allow_cookie=True):
     """Resolve the current user from the request's session token."""
-    return auth.get_session_user(get_auth_token())
+    return auth.get_session_user(get_auth_token(allow_cookie=allow_cookie))
 
 
 @app.route("/api/settings", methods=["GET"])
@@ -201,6 +250,7 @@ def api_settings(action=None):
 def protect_sensitive_responses(response):
     if request.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 
@@ -300,7 +350,7 @@ def api_list_items():
 
     try:
         items = storage.list_items(user)
-        return jsonify({"items": items})
+        return jsonify({"items": items, "upload_policy": upload_policy(items)})
     except StorageError:
         raise
     except Exception as e:
@@ -315,7 +365,7 @@ def api_create_item():
     Mərkəzi Şifrələmə Motorunda .sifrx formatında şifrələyir və
     istifadəçinin bulud qovluğunda saxlayır.
     """
-    user = get_authenticated_user()
+    user = get_authenticated_user(allow_cookie=False)
     if not user:
         return jsonify({"error": "İcazə verilmədi."}), 401
 
@@ -356,9 +406,11 @@ def api_decrypt_item(item_id):
     """
     İstifadəçinin qovluğundakı .sifrx faylını Mərkəzi Şifrələmə Motoru vasitəsilə deşifrələyir.
     """
-    user = get_authenticated_user()
+    user = get_authenticated_user(allow_cookie=False)
     if not user:
         return jsonify({"error": "İcazə verilmədi."}), 401
+
+    file_limiter.check(storage.compute_blind_index(user), "read")
 
     req_data = request.get_json(force=True, silent=True) or {}
     master_password = req_data.get("master_password")
@@ -372,7 +424,15 @@ def api_decrypt_item(item_id):
     try:
         # Mərkəzi motor vasitəsilə deşifrələnmə
         decrypted = CentralCryptoEngine.decrypt_from_sifrx(sifrx_package, master_password)
-        return jsonify({"success": True, "item": decrypted["payload"], "meta": decrypted["meta"]})
+        payload = decrypted["payload"]
+        if item_id.startswith("file_"):
+            _, text = open_file_payload(payload)
+            payload = {"filename": payload["filename"], "encoding": payload["encoding"],
+                       "size_bytes": payload["size_bytes"], "preview": text[:PREVIEW_CHARS],
+                       "truncated": len(text) > PREVIEW_CHARS}
+        return jsonify({"success": True, "item": payload, "meta": decrypted["meta"]})
+    except FileValidationError:
+        raise
     except InvalidKeyOrTamperedDataError as e:
         request_logger.warning("api.operation_failed", exc_info=True)
         return jsonify({"error": str(e)}), 403
@@ -389,7 +449,7 @@ def api_decrypt_item(item_id):
 @app.route("/api/items/<item_id>", methods=["DELETE"])
 def api_delete_item(item_id):
     """Bulud qovluğundan .sifrx faylını silir."""
-    user = get_authenticated_user()
+    user = get_authenticated_user(allow_cookie=False)
     if not user:
         return jsonify({"error": "İcazə verilmədi."}), 401
 
@@ -398,3 +458,68 @@ def api_delete_item(item_id):
         return jsonify({"error": "Fayl tapılmadı və ya silinə bilmədi."}), 404
 
     return jsonify({"success": True, "message": "Məlumat silindi."})
+
+
+def read_file_request(fields):
+    if request.mimetype != "application/json" or request.headers.get("Content-Encoding", "identity") != "identity":
+        raise FileValidationError("JSON sorğusu tələb olunur.", 415)
+    data = strict_json(request.get_data(cache=False))
+    if set(data) != fields:
+        raise FileValidationError("Form məlumatları düzgün deyil.")
+    return data
+
+
+@app.route("/api/files", methods=["POST"])
+def api_upload_file():
+    token = get_auth_token(allow_cookie=False)
+    user = auth.get_session_user(token)
+    if not user:
+        return jsonify({"error": "Hesaba daxil olun."}), 401
+    file_limiter.check(storage.compute_blind_index(user), "upload")
+    if not _upload_slots.acquire(blocking=False):
+        raise FileRateLimitError(1)
+    try:
+        data = read_file_request({"filename", "content_base64", "master_password"})
+        payload = validate_upload(data)
+        with _account_request_lock:
+            if auth.get_session_user(token) != user:
+                return jsonify({"error": "Hesaba daxil olun."}), 401
+            meta = storage.get_user_meta(user)
+            if not meta or not CentralCryptoEngine.verify_account_password(data["master_password"], meta):
+                return jsonify({"error": "Master şifrə düzgün deyil."}), 403
+            policy = upload_policy(storage.list_items(user))
+            if policy["count"] >= MAX_FILES or policy["used_bytes"] + payload["size_bytes"] > MAX_TOTAL_BYTES:
+                raise FileValidationError("Fayl limiti dolub: maksimum 10 MiB və 50 fayl.", 409)
+            package = CentralCryptoEngine.encrypt_to_sifrx(payload, data["master_password"], meta={
+                "type": "file", "title": payload["filename"], "size_bytes": payload["size_bytes"]})
+            item_id = storage.save_item(user, package, item_id="file_" + str(uuid.uuid4()))
+            request_logger.info("file.upload_completed")
+            return jsonify({"success": True, "id": item_id}), 201
+    finally:
+        _upload_slots.release()
+
+
+@app.route("/api/items/<item_id>/download", methods=["POST"])
+def api_download_file(item_id):
+    user = get_authenticated_user(allow_cookie=False)
+    if not user:
+        return jsonify({"error": "Hesaba daxil olun."}), 401
+    file_limiter.check(storage.compute_blind_index(user), "read")
+    data = read_file_request({"master_password"})
+    password = data["master_password"]
+    if not isinstance(password, str) or not 0 < len(password) <= 1024:
+        raise FileValidationError("Master şifrə tələb olunur.")
+    if not item_id.startswith("file_"):
+        raise FileValidationError("Fayl tapılmadı.", 404)
+    package = storage.get_item(user, item_id)
+    if package is None:
+        raise FileValidationError("Fayl tapılmadı.", 404)
+    try:
+        payload = CentralCryptoEngine.decrypt_from_sifrx(package, password)["payload"]
+    except InvalidKeyOrTamperedDataError:
+        return jsonify({"error": "Fayl açıla bilmədi. Master şifrəni yoxlayın."}), 403
+    raw, _ = open_file_payload(payload)
+    response = send_file(BytesIO(raw), mimetype="application/octet-stream", as_attachment=True,
+                         download_name=payload["filename"], conditional=False, etag=False)
+    response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    return response

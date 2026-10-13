@@ -54,6 +54,10 @@ let appState = {
   itemType: "login",
   decryptedItems: {}
 };
+const downloadUrls = new Set();
+let saveInProgress = false;
+let saveGeneration = 0;
+const MAX_FILE_BYTES = 1048576;
 
 // DOM Yükləndikdə
 document.addEventListener("DOMContentLoaded", async () => {
@@ -196,20 +200,26 @@ async function handleRegister(e) {
 
 // ÇIXIŞ
 async function handleLogout() {
-  if (appState.token) {
+  const token = appState.token;
+  clearLocalSession();
+  showAuthSection();
+  if (token) {
     try {
       await fetch("/api/logout", {
         method: "POST",
-        headers: { Authorization: "Bearer " + appState.token }
+        headers: { Authorization: "Bearer " + token }
       });
     } catch (_) {}
   }
-
-  clearLocalSession();
-  showAuthSection();
 }
 
 function clearLocalSession() {
+  saveGeneration++;
+  saveInProgress = false;
+  const saveButton = document.getElementById("btnSaveItem");
+  if (saveButton) saveButton.disabled = false;
+  for (const url of downloadUrls) URL.revokeObjectURL(url);
+  downloadUrls.clear();
   appState.token = null;
   appState.user = null;
   appState.masterPassword = null;
@@ -224,6 +234,11 @@ function clearLocalSession() {
   sessionStorage.removeItem("sifrx_token");
   sessionStorage.removeItem("sifrx_user");
   sessionStorage.removeItem("sifrx_mp");
+  const quota = document.getElementById("fileQuota");
+  if (quota) quota.textContent = "Hesab limiti: 10 MiB və 50 fayl.";
+  const status = document.getElementById("itemStatus");
+  if (status) { status.textContent = ""; status.classList.add("hidden"); }
+  if (document.getElementById("itemForm")) switchItemType("login");
 
 }
 
@@ -283,40 +298,48 @@ function useGeneratedForLogin() {
 
 // MƏLUMAT TİPİ DƏYİŞMƏSİ (LOGIN / KART)
 function switchItemType(type) {
+  if (saveInProgress || !["login", "card", "file"].includes(type)) return;
   appState.itemType = type;
-  const btnLogin = document.getElementById("btnTypeLogin");
-  const btnCard = document.getElementById("btnTypeCard");
-  const loginFields = document.getElementById("loginFields");
-  const cardFields = document.getElementById("cardFields");
-
-  if (type === "login") {
-    btnLogin.classList.add("active");
-    btnCard.classList.remove("active");
-    loginFields.classList.remove("hidden");
-    cardFields.classList.add("hidden");
-  } else {
-    btnCard.classList.add("active");
-    btnLogin.classList.remove("active");
-    cardFields.classList.remove("hidden");
-    loginFields.classList.add("hidden");
+  for (const [kind, suffix] of [["login", "Login"], ["card", "Card"], ["file", "File"]]) {
+    const active = kind === type;
+    document.getElementById("btnType" + suffix).classList.toggle("active", active);
+    const fields = document.getElementById(kind + "Fields");
+    fields.classList.toggle("hidden", !active);
+    fields.querySelectorAll("input, button").forEach(control => { control.disabled = !active; });
   }
+}
+
+function fileToBase64(bytes) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary);
 }
 
 // MƏLUMATIN ŞİFRƏLƏNƏRƏK SAXLANILMASI
 async function handleSaveItem(e) {
   e.preventDefault();
+  if (saveInProgress || !appState.token) return;
+  saveInProgress = true;
+  const generation = ++saveGeneration;
+  const token = appState.token;
+  const password = appState.masterPassword;
+  const itemType = appState.itemType;
+  const saveButton = document.getElementById("btnSaveItem");
+  saveButton.disabled = true;
   const statusEl = document.getElementById("itemStatus");
   statusEl.classList.add("hidden");
 
   let payload = {};
-  if (appState.itemType === "login") {
+  if (itemType === "login") {
     payload = {
       title: document.getElementById("fieldLoginTitle").value.trim(),
       username: document.getElementById("fieldLoginUsername").value.trim(),
       password: document.getElementById("fieldLoginPassword").value,
       website: document.getElementById("fieldLoginWebsite").value.trim()
     };
-  } else {
+  } else if (itemType === "card") {
     payload = {
       title: document.getElementById("fieldCardTitle").value.trim(),
       cardholder: document.getElementById("fieldCardHolder").value.trim(),
@@ -327,19 +350,31 @@ async function handleSaveItem(e) {
   }
 
   try {
-    const res = await fetch("/api/items", {
+    let endpoint = "/api/items";
+    let body = { type: itemType, master_password: password, data: payload };
+    if (itemType === "file") {
+      const files = document.getElementById("fieldFile").files;
+      const file = files[0];
+      if (files.length !== 1 || !/\.(txt|csv)$/i.test(file.name)) {
+        throw new Error("Yalnız bir .txt və ya .csv faylı seçin.");
+      }
+      if (file.size > MAX_FILE_BYTES) throw new Error("Fayl həcmi 1 MiB-dan çox ola bilməz.");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (appState.token !== token) return;
+      if (bytes.length > MAX_FILE_BYTES) throw new Error("Fayl həcmi 1 MiB-dan çox ola bilməz.");
+      endpoint = "/api/files";
+      body = { filename: file.name, content_base64: fileToBase64(bytes), master_password: password };
+    }
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer " + appState.token
+        Authorization: "Bearer " + token
       },
-      body: JSON.stringify({
-        type: appState.itemType,
-        master_password: appState.masterPassword,
-        data: payload
-      })
+      body: JSON.stringify(body)
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({ error: "Sorğu tamamlanmadı. Fayl və sorğu limitlərini yoxlayın." }));
+    if (appState.token !== token) return;
 
     if (!res.ok || !data.success) {
       statusEl.className = "status-msg error";
@@ -353,13 +388,19 @@ async function handleSaveItem(e) {
     statusEl.className = "status-msg success";
     statusEl.innerText = "Məlumat .sifrx formatında şifrələnərək saxlanıldı.";
     statusEl.classList.remove("hidden");
-    setTimeout(() => statusEl.classList.add("hidden"), 3000);
+    setTimeout(() => { if (appState.token === token) statusEl.classList.add("hidden"); }, 3000);
 
     loadItems();
   } catch (err) {
+    if (appState.token !== token) return;
     statusEl.className = "status-msg error";
     statusEl.innerText = "Şəbəkə xətası: " + err.message;
     statusEl.classList.remove("hidden");
+  } finally {
+    if (saveGeneration === generation) {
+      saveInProgress = false;
+      saveButton.disabled = false;
+    }
   }
 }
 
@@ -382,11 +423,14 @@ function renderVaultItem(item) {
   const card = vaultElement("div", "item-card");
   const header = vaultElement("div", "item-header");
   const info = vaultElement("div", "item-info");
+  const title = vaultElement("span", "item-title", item.title || "");
+  title.title = item.title || "";
   info.append(vaultElement("span", "item-badge" + (item.type === "card" ? " card" : ""),
-                          item.type === "card" ? "Kart" : "Login"),
-              vaultElement("span", "item-title", item.title || ""));
+                          item.type === "file" ? "Fayl" : item.type === "card" ? "Kart" : "Login"),
+              title);
   const actions = vaultElement("div", "item-actions");
   const decoded = appState.decryptedItems[item.id];
+  if (item.type === "file") actions.append(vaultButton("Endir", "btn btn-sm btn-secondary", () => downloadFile(item.id)));
   actions.append(vaultButton(decoded ? "Gizlət" : "Bax", "btn btn-sm btn-secondary",
                             () => toggleDecryptItem(item.id)),
                  vaultButton("Sil", "btn btn-sm btn-danger", () => deleteItem(item.id)));
@@ -394,6 +438,13 @@ function renderVaultItem(item) {
   card.append(header);
   if (decoded) {
     const view = vaultElement("div", "decrypted-view");
+    if (item.type === "file") {
+      view.append(vaultElement("div", "file-help", `${decoded.filename} · ${decoded.size_bytes} bayt · ${decoded.encoding}`),
+                  vaultElement("pre", "file-preview", decoded.preview));
+      if (decoded.truncated) view.append(vaultElement("p", "file-help", "İlk 65536 simvol göstərilir. Tam faylı endirə bilərsiniz."));
+      card.append(view);
+      return card;
+    }
     const fields = item.type === "card"
       ? [["Sahib:", "cardholder"], ["Kart №:", "cardNumber"], ["Bitmə:", "expiry"], ["CVV:", "cvv"]]
       : [["İstifadəçi:", "username"], ["Şifrə:", "password"], ["Qeyd / Sayt:", "website"]];
@@ -424,6 +475,11 @@ async function loadItems() {
     if (!res.ok || !Array.isArray(data.items)) {
       container.replaceChildren(vaultElement("div", "empty-state", "Məlumatları yükləmək mümkün olmadı"));
       return;
+    }
+    const quota = document.getElementById("fileQuota");
+    if (quota && data.upload_policy) {
+      const policy = data.upload_policy;
+      quota.textContent = `${(policy.used_bytes / 1048576).toFixed(2)} / 10 MiB · ${policy.count} / 50 fayl`;
     }
     container.replaceChildren(...(data.items.length
       ? data.items.map(renderVaultItem)
@@ -464,7 +520,7 @@ async function toggleDecryptItem(itemId) {
     appState.decryptedItems[itemId] = data.item;
     loadItems();
   } catch (err) {
-    alert("Xəta: " + err.message);
+    if (appState.token === token) alert("Xəta: " + err.message);
   }
 }
 
@@ -472,12 +528,14 @@ async function toggleDecryptItem(itemId) {
 async function deleteItem(itemId) {
   if (!confirm("Bu elementi silmək istədiyinizdən əminsiniz?")) return;
 
+  const token = appState.token;
   try {
     const res = await fetch(`/api/items/${itemId}`, {
       method: "DELETE",
-      headers: { Authorization: "Bearer " + appState.token }
+      headers: { Authorization: "Bearer " + token }
     });
     const data = await res.json();
+    if (appState.token !== token) return;
 
     if (!res.ok || !data.success) {
       alert(data.error || "Silinmə xətası.");
@@ -487,7 +545,40 @@ async function deleteItem(itemId) {
     delete appState.decryptedItems[itemId];
     loadItems();
   } catch (err) {
-    alert("Xəta: " + err.message);
+    if (appState.token === token) alert("Xəta: " + err.message);
+  }
+}
+
+async function downloadFile(itemId) {
+  const token = appState.token;
+  if (!token) return;
+  try {
+    const response = await fetch(`/api/items/${encodeURIComponent(itemId)}/download`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ master_password: appState.masterPassword })
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (appState.token === token) alert(data.error || "Faylı endirmək mümkün olmadı.");
+      return;
+    }
+    const blob = await response.blob();
+    if (appState.token !== token) return;
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
+    downloadUrls.add(url);
+    const link = document.createElement("a");
+    link.href = url;
+    // Use the server's validated attachment name, including RFC 5987 Unicode.
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const unicodeName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const asciiName = disposition.match(/filename="([^"]+)"|filename=([^;]+)/i);
+    link.download = unicodeName ? decodeURIComponent(unicodeName[1]) : asciiName ? (asciiName[1] || asciiName[2]).trim() : "fayl.txt";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 1000);
+  } catch (_) {
+    if (appState.token === token) alert("Faylı endirmək mümkün olmadı.");
   }
 }
 

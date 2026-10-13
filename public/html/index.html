@@ -92,6 +92,7 @@
         <div class="type-toggle">
           <button type="button" id="btnTypeLogin" class="toggle-btn active" onclick="switchItemType('login')">Login</button>
           <button type="button" id="btnTypeCard" class="toggle-btn" onclick="switchItemType('card')">Kart</button>
+          <button type="button" id="btnTypeFile" class="toggle-btn" onclick="switchItemType('file')">Fayl</button>
         </div>
 
         <form id="itemForm" onsubmit="handleSaveItem(event)">
@@ -108,18 +109,26 @@
 
           <!-- Kart Form Sahələri -->
           <div id="cardFields" class="form-fields hidden">
-            <input type="text" id="fieldCardTitle" placeholder="Kart Başlığı (məs. ABB Visa, Kapital)">
-            <input type="text" id="fieldCardHolder" placeholder="Kart Sahibi (Ad Soyad)">
-            <input type="text" id="fieldCardNumber" placeholder="Kart Nömrəsi (16 rəqəm)" maxlength="19">
+            <input type="text" id="fieldCardTitle" placeholder="Kart Başlığı (məs. ABB Visa, Kapital)" disabled>
+            <input type="text" id="fieldCardHolder" placeholder="Kart Sahibi (Ad Soyad)" disabled>
+            <input type="text" id="fieldCardNumber" placeholder="Kart Nömrəsi (16 rəqəm)" maxlength="19" disabled>
             <div class="grid-2">
-              <input type="text" id="fieldCardExpiry" placeholder="MM/YY" maxlength="5">
-              <input type="password" id="fieldCardCvv" placeholder="CVV" maxlength="4" class="code-font">
+              <input type="text" id="fieldCardExpiry" placeholder="MM/YY" maxlength="5" disabled>
+              <input type="password" id="fieldCardCvv" placeholder="CVV" maxlength="4" class="code-font" disabled>
             </div>
+          </div>
+
+          <div id="fileFields" class="form-fields hidden">
+            <label for="fieldFile">Şifrələnəcək mətn faylı</label>
+            <input type="file" id="fieldFile" accept=".txt,.csv" required disabled>
+            <p class="file-help">Yalnız .txt və .csv · Hər fayl maksimum 1 MiB · UTF-8 və BOM işarəli UTF-16.</p>
+            <p class="file-help">CSV-də =, +, -, @ ilə başlayan xanalar (mənfi ədədlər daxil) qəbul edilmir.</p>
+            <p id="fileQuota" class="file-help" aria-live="polite">Hesab limiti: 10 MiB və 50 fayl.</p>
           </div>
 
           <button type="submit" id="btnSaveItem" class="btn btn-primary btn-block">Yadda Saxla</button>
         </form>
-        <div id="itemStatus" class="status-msg hidden"></div>
+        <div id="itemStatus" class="status-msg hidden" role="status" aria-live="polite"></div>
       </section>
 
       <!-- SAXLANILAN ŞİFRƏLƏNMİŞ .SIFRX ELEMENTLƏRİ -->

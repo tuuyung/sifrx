@@ -12,6 +12,7 @@ import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from backend.logging_setup import logged_operation
+from backend.files import MAX_PACKAGE_BYTES, MAX_FILE_BYTES, validate_filename
 
 load_dotenv()
 logger = logging.getLogger("sifrx.storage")
@@ -65,11 +66,26 @@ class CloudStorageManager:
         if not isinstance(name, str) or not name or name in (".", "..") or "/" in name or "\\" in name:
             raise StorageError("Invalid account filename.")
 
+    @staticmethod
+    def _read_body(response, filename):
+        body = response["Body"]
+        try:
+            if filename.startswith("file_") and filename.endswith(".sifrx"):
+                if response.get("ContentLength", 0) > MAX_PACKAGE_BYTES:
+                    raise StorageError("File package exceeds storage limit.")
+                content = body.read(MAX_PACKAGE_BYTES + 1)
+                if len(content) > MAX_PACKAGE_BYTES:
+                    raise StorageError("File package exceeds storage limit.")
+                return content
+            return body.read()
+        finally:
+            body.close()
+
     def _read_json(self, username, filename):
         key = self._get_s3_key(self.compute_blind_index(username), filename)
         try:
             response = self.s3_client.get_object(Bucket=self.s3_bucket, Key=key)
-            return json.loads(response["Body"].read())
+            return json.loads(self._read_body(response, filename))
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") == "NoSuchKey":
                 return None
@@ -118,16 +134,37 @@ class CloudStorageManager:
     @logged_operation
     def list_items(self, username):
         items = []
-        for name, content in self.account_snapshot(username).items():
+        for name, obj in self._account_objects(username):
             if name.endswith(".sifrx"):
                 try:
-                    meta = json.loads(content).get("meta", {})
-                    items.append({"id": meta.get("id", name[:-6]), "type": meta.get("type", "login"),
+                    meta = self._read_json(username, name).get("meta", {})
+                    item = {"id": name[:-6], "type": meta.get("type", "login"),
                                   "title": meta.get("title", "Adsız"), "created_at": meta.get("created_at"),
-                                  "updated_at": meta.get("updated_at")})
+                                  "updated_at": meta.get("updated_at")}
+                    if name.startswith("file_") or item["type"] == "file":
+                        if (item["type"] != "file" or not name.startswith("file_")
+                                or type(meta.get("size_bytes")) is not int
+                                or not 0 <= meta["size_bytes"] <= MAX_FILE_BYTES):
+                            raise StorageError("Invalid file metadata.")
+                        validate_filename(item["title"])
+                        item["size_bytes"] = meta["size_bytes"]
+                    items.append(item)
                 except Exception as error:
                     raise StorageError("Unable to read vault item metadata.") from error
         return sorted(items, key=lambda item: item.get("updated_at") or "", reverse=True)
+
+    def _account_objects(self, username):
+        prefix = self._get_s3_key(self.compute_blind_index(username), "")
+        try:
+            for page in self.s3_client.get_paginator("list_objects_v2").paginate(Bucket=self.s3_bucket, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    name = obj["Key"][len(prefix):]
+                    self._validate_filename(name)
+                    if name.startswith("file_") and obj.get("Size", 0) > MAX_PACKAGE_BYTES:
+                        raise StorageError("File package exceeds storage limit.")
+                    yield name, obj
+        except Exception as error:
+            raise StorageError("Unable to list account objects.") from error
 
     @logged_operation
     def account_snapshot(self, username):
@@ -135,11 +172,9 @@ class CloudStorageManager:
         prefix = self._get_s3_key(self.compute_blind_index(username), "")
         files = {}
         try:
-            for page in self.s3_client.get_paginator("list_objects_v2").paginate(Bucket=self.s3_bucket, Prefix=prefix):
-                for obj in page.get("Contents", []):
-                    name = obj["Key"][len(prefix):]
-                    self._validate_filename(name)
-                    files[name] = self.s3_client.get_object(Bucket=self.s3_bucket, Key=obj["Key"])["Body"].read()
+            for name, obj in self._account_objects(username):
+                response = self.s3_client.get_object(Bucket=self.s3_bucket, Key=obj["Key"])
+                files[name] = self._read_body(response, name)
         except Exception as error:
             raise StorageError("Unable to read account snapshot from S3.") from error
         return files

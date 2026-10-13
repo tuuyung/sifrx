@@ -3,9 +3,14 @@ Run the backend from the project root:
 **Windows (PowerShell):**
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r backend/requirements.txt waitress
-python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
+python -m waitress --host=127.0.0.1 --port=5000 --max-request-body-size=1572864 --inbuf-overflow=2097152 --outbuf-overflow=2097152 --connection-limit=20 --channel-timeout=30 --cleanup-interval=5 backend.app:app
 ```
+
+For subsequent Windows runs, activate the environment with
+`.\.venv\Scripts\Activate.ps1` and run the final command from the project root.
 
 **Linux (Bash):**
 
@@ -13,7 +18,7 @@ python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
 python3 -m venv .venv
 source .venv/bin/activate
 sudo .venv/bin/python -m pip install -r backend/requirements.txt waitress
-sudo .venv/bin/python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
+sudo .venv/bin/python -m waitress --host=127.0.0.1 --port=5000 --max-request-body-size=1572864 --inbuf-overflow=2097152 --outbuf-overflow=2097152 --connection-limit=20 --channel-timeout=30 --cleanup-interval=5 backend.app:app
 ```
 
 For subsequent Linux runs, activate the environment with `source .venv/bin/activate`
@@ -141,7 +146,8 @@ SifrX/
     logging_setup.py   # Single JSON log and operation/request logging
     requirements.txt
   tests/
-    test_auth.py       # Authentication and account-security regression tests
+    test_files.py      # Isolated upload and account-security regressions
+    browser_smoke.py   # Real-browser smoke checks with simulated S3
   public/
     html/
       index.html
@@ -211,7 +217,7 @@ To run the API locally from the project root:
 
 ```powershell
 python -m pip install waitress
-python -m waitress --host=127.0.0.1 --port=5000 backend.app:app
+python -m waitress --host=127.0.0.1 --port=5000 --max-request-body-size=1572864 --inbuf-overflow=2097152 --outbuf-overflow=2097152 --connection-limit=20 --channel-timeout=30 --cleanup-interval=5 backend.app:app
 ```
 
 Keep the process running. Frontend hosting and Nginx configuration are managed
@@ -309,3 +315,96 @@ python -m unittest discover -s tests -v
 node --check public/js/app.js
 node --check public/js/settings.js
 ```
+
+## Encrypted TXT and CSV files
+
+Choose **Fayl** alongside Login and Kart. Select one `.txt` or `.csv` file and
+save it to the encrypted vault. **Bax** displays at most 65,536 characters as
+literal text; **Endir** downloads the original bytes, including the original
+encoding and BOM; **Sil** deletes the item and frees its quota. Duplicate names
+create distinct items. Password changes re-encrypt these files too.
+
+Limits are enforced by the server, independent of browser checks:
+
+| Limit | Value |
+| --- | --- |
+| Original file bytes | 1,048,576 (1 MiB), inclusive; empty files allowed |
+| Uploaded file contents per account | 10,485,760 (10 MiB) |
+| Uploaded files per account | 50 |
+| Upload JSON body | 1,572,864 bytes, including base64 overhead |
+| Other API request bodies | 1,048,576 bytes |
+| Stored file package read | 2 MiB |
+| Upload attempts | 5/account/minute; 30/server/minute |
+| Combined decrypt/download attempts | 20/account/minute, including login/card decrypts |
+| Concurrent upload validations | 2 |
+| CSV scan | 50,000 rows; 1,024 columns under each supported delimiter |
+
+Text must be strict UTF-8 (optional BOM), or UTF-16 LE/BE with a BOM. Binary
+data, NULs and non-text control characters are rejected. CSV is conservatively
+scanned under comma, semicolon and tab interpretations using double-quote
+escaping. Cells starting with `=`, `+`, `-` or `@`, including hidden-whitespace
+and full-width variants, are rejected. This also rejects negative numeric
+cells. Files are never imported as records, rendered as HTML, or executed.
+Formula rejection reduces risk; it is not a general antivirus scan or a
+guarantee about every external spreadsheet application's interpretation.
+
+Uploads use JSON rather than multipart forms. `POST /api/files` requires
+`{filename, content_base64, master_password}` and explicit bearer authentication.
+File bodies, names, encoding and byte counts are encrypted in `.sifrx` packages
+with generated `file_<uuid>` identifiers. Titles (filenames), byte counts,
+types, IDs and timestamps remain plaintext metadata. No plaintext files or
+public/presigned download URLs are written by the application. The S3 bucket
+must remain private. The existing server-side encryption architecture and
+single-process requirement still apply; this change is not zero-knowledge.
+
+`GET /api/items` adds an `upload_policy` object with `max_file_bytes`,
+`max_total_bytes`, `max_files`, `used_bytes` and `count`. File list entries add
+`size_bytes`. Existing `/api/items/<id>/decrypt` returns file preview fields
+`filename`, `encoding`, `size_bytes`, `preview` and `truncated`, without base64
+content. `POST /api/items/<id>/download` accepts `{master_password}` and returns
+an uncached, sandboxed binary attachment. Vault creation, decrypt, download and
+deletion now require bearer headers; cookie-only callers must update. Rejected
+uploads do not write storage. Size failures return 413, exhausted account quotas
+409, and rate/concurrency limits 429 with `Retry-After`.
+
+### Required deployment updates
+
+Install updated requirements and restart the backend using the Waitress command
+above or the updated `sifrx.service`. Keep input/output overflow thresholds above
+the maximum upload body: Waitress's default 512 KiB input threshold would stage
+larger plaintext requests to temporary files. Limits must also be applied at
+the reverse proxy, before Waitress buffers any unauthenticated request.
+
+Merge `deploy/nginx-uploads.conf.example` into the existing HTTPS configuration:
+put the two rate/concurrency zone declarations in `http {}` and merge the two
+locations into the existing website's `server {}`. Preserve existing TLS,
+static-file routing and any proxy controls; do not add duplicate locations.
+The upload location permits 1536 KiB while other API routes retain 1 MiB. Both
+disable request/response disk buffering and use HTTP/1.1 upstream forwarding.
+Upload IP limits are 10 requests/minute (burst 2) and 2 concurrent connections;
+keep the backend bound to loopback. If another proxy sits before Nginx, configure
+its trusted real-client-IP handling explicitly rather than trusting arbitrary
+forwarded headers. Run `nginx -t` and reload Nginx after merging the snippet.
+These proxy changes are external to this repository and are not applied by
+editing the example. Do not enable request-body logging or proxy body caching.
+
+### Isolated verification
+
+`python -m unittest discover -s tests -v` exercises file validation, simulated
+S3 storage, quota races, account isolation, rate limits, rollback, rotation and
+deletion without using real accounts or cloud data. The existing deletion of
+the older authentication test file is preserved.
+
+Optional browser verification uses an ephemeral browser profile and loopback
+Waitress with simulated S3. It checks uploads exceeding 512 KiB without server
+disk spooling, preview injection, byte-for-byte downloads, CSV rejection,
+quota release, existing forms, settings and stale responses after logout:
+
+```powershell
+python -m pip install playwright
+python tests/browser_smoke.py --channel chrome
+```
+
+Use `--channel msedge` for installed Edge. On hosts without an installed browser,
+run `python -m playwright install chromium` and omit `--channel`. Playwright is
+an optional test dependency and is not needed by the production application.

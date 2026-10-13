@@ -1,0 +1,40 @@
+# Merge into the existing HTTPS configuration; do not create a second server.
+# These zone declarations belong in the http {} context.
+limit_req_zone $binary_remote_addr zone=sifrx_upload_rate:1m rate=10r/m;
+limit_conn_zone $binary_remote_addr zone=sifrx_upload_connections:1m;
+
+# These locations belong inside the existing HTTPS server {}.
+# Preserve the site's existing TLS, static-file and host configuration.
+location = /api/files {
+    client_max_body_size 1536k;
+    client_body_buffer_size 1536k;
+    client_body_timeout 15s;
+    limit_req zone=sifrx_upload_rate burst=2 nodelay;
+    limit_req_status 429;
+    limit_conn sifrx_upload_connections 2;
+    limit_conn_status 429;
+    proxy_http_version 1.1;
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_max_temp_file_size 0;
+    proxy_set_header Host $http_host;
+    proxy_set_header Connection "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 60s;
+    proxy_pass http://127.0.0.1:5000;
+}
+
+location /api/ {
+    client_max_body_size 1m;
+    client_body_buffer_size 1m;
+    client_body_timeout 15s;
+    proxy_http_version 1.1;
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_max_temp_file_size 0;
+    proxy_set_header Host $http_host;
+    proxy_set_header Connection "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 60s;
+    proxy_pass http://127.0.0.1:5000;
+}
